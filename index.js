@@ -12,7 +12,16 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-// Fungsi kirim pesan Telegram tanpa spam log socket
+// Normalisasi URL YouTube ke format standar bersih
+function cleanYouTubeUrl(rawUrl) {
+  if (!rawUrl) return null;
+  const match = rawUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/))([\w-]{11})/);
+  if (match && match[1]) {
+    return `https://www.youtube.com/watch?v=${match[1]}`;
+  }
+  return rawUrl.split('?')[0]; // Hapus query params jika format umum
+}
+
 async function sendTelegramMsg(chatId, text) {
   if (!BOT_TOKEN || !chatId) return;
   try {
@@ -26,7 +35,6 @@ async function sendTelegramMsg(chatId, text) {
   }
 }
 
-// Fungsi kirim video Telegram via multipart form-data
 async function sendTelegramVideo(chatId, videoPath, caption) {
   if (!BOT_TOKEN || !chatId) return;
   try {
@@ -44,10 +52,10 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.description || 'Gagal upload video');
-    console.log('Video sukses terkirim ke Telegram!');
+    console.log('Video berhasil dikirim ke Telegram!');
   } catch (e) {
     console.error('Gagal kirim video TG:', e.message);
-    await sendTelegramMsg(chatId, `❌ Gagal kirim file video: ${e.message}`);
+    await sendTelegramMsg(chatId, `❌ Gagal upload file video: ${e.message}`);
   }
 }
 
@@ -55,28 +63,28 @@ app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
 
-  const videoUrl = payload.video_url || 
-                   payload.source_url || 
-                   payload.url || 
-                   payload.clip_data?.source_url || 
-                   payload.clip_data?.video_url;
+  const rawUrl = payload.video_url || 
+                 payload.source_url || 
+                 payload.url || 
+                 payload.clip_data?.source_url || 
+                 payload.clip_data?.video_url;
 
+  const videoUrl = cleanYouTubeUrl(rawUrl);
   const startTime = payload.timestamps?.start_time || payload.start_time || '00:00:10';
   const duration = payload.timestamps?.duration_seconds || payload.duration || 30;
   const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
   const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
 
   if (!videoUrl) {
-    console.log('video_url kosong');
-    await sendTelegramMsg(chatId, '❌ Gagal: URL video tidak disertakan dalam data.');
+    await sendTelegramMsg(chatId, '❌ Gagal: URL video tidak valid atau tidak ditemukan.');
     return;
   }
 
   const outputClip = path.join(__dirname, `clip_${Date.now()}.mp4`);
 
   try {
-    console.log(`Mulai render klip: "${clipTitle}" | URL: ${videoUrl}`);
-    await sendTelegramMsg(chatId, `⏳ *Sedang memproses klip:*\n"${clipTitle}"\n\nMohon tunggu 1-2 menit...`);
+    console.log(`Mulai render klip: "${clipTitle}" | URL Bersih: ${videoUrl}`);
+    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
     const sourceStream = await play.stream(videoUrl, { quality: 1 });
 
@@ -91,10 +99,10 @@ app.post('/render-webhook', async (req, res) => {
         .outputOptions(['-c:v libx264', '-preset ultrafast', '-c:a aac'])
         .output(outputClip)
         .on('end', () => {
-          console.log('Rendering FFmpeg selesai.');
+          console.log('FFmpeg render selesai.');
           resolve();
         })
-        .on('error', (err) => reject(new Error(err.message || 'Error FFmpeg')))
+        .on('error', (err) => reject(new Error(err.message || 'Error FFmpeg encode')))
         .run();
     });
 
@@ -105,9 +113,8 @@ app.post('/render-webhook', async (req, res) => {
     );
 
   } catch (err) {
-    const cleanMsg = err.message || 'Error tidak diketahui';
-    console.error('Proses gagal:', cleanMsg);
-    await sendTelegramMsg(chatId, `❌ Gagal memproses video: ${cleanMsg}`);
+    console.error('Proses gagal:', err.message);
+    await sendTelegramMsg(chatId, `❌ Gagal memproses video: ${err.message}`);
   } finally {
     if (fs.existsSync(outputClip)) {
       try { fs.unlinkSync(outputClip); } catch (e) {}
