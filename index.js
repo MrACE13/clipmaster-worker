@@ -14,18 +14,26 @@ app.use(express.json());
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 
 app.post('/render-webhook', async (req, res) => {
-  const payload = req.body;
-  console.log('Perintah render masuk:', JSON.stringify(payload));
+  const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
 
-  const videoUrl = payload.video_url || payload.source_url || payload.url;
+  // Cari fallback URL jika bersarang di dalam clip_data atau root
+  const videoUrl = payload.video_url || 
+                   payload.source_url || 
+                   payload.url || 
+                   payload.clip_data?.source_url || 
+                   payload.clip_data?.video_url;
+
   const startTime = payload.timestamps?.start_time || payload.start_time || '00:00:10';
   const duration = payload.timestamps?.duration_seconds || payload.duration || 30;
-  const chatId = payload.chat_id || payload.chatId;
+  const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
   const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
 
   if (!videoUrl) {
-    console.error('Video URL tidak ditemukan dalam data');
+    console.error('ERROR: video_url tidak ditemukan pada payload');
+    if (chatId) {
+      await bot.sendMessage(chatId, '❌ Gagal: Tautan video (URL) tidak terlampir dalam perintah render.');
+    }
     return;
   }
 
@@ -34,36 +42,31 @@ app.post('/render-webhook', async (req, res) => {
 
   try {
     if (chatId) {
-      await bot.sendMessage(chatId, `⏳ Mulai memproses render klip: "${clipTitle}"\nMohon tunggu sekitar 1-2 menit...`);
+      await bot.sendMessage(chatId, `⏳ Sedang mengunduh dan memotong: "${clipTitle}"\nMohon tunggu 1-2 menit...`);
     }
 
-    console.log(`Mengunduh video dari: ${videoUrl}`);
+    console.log(`Mengunduh stream: ${videoUrl}`);
 
-    // Download video stream dari YouTube
     await new Promise((resolve, reject) => {
       const stream = ytdl(videoUrl, {
-        quality: 'highestvideo',
-        filter: 'videoandaudio',
+        quality: 'highest',
+        filter: 'audioandvideo',
         requestOptions: {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           }
         }
       });
 
       const writeStream = fs.createWriteStream(tempDownload);
       stream.pipe(writeStream);
-
-      writeStream.on('finish', () => {
-        console.log('Unduhan selesai, mulai memotong dengan FFmpeg...');
-        resolve();
-      });
-
-      stream.on('error', (err) => reject(new Error(`Gagal download: ${err.message}`)));
-      writeStream.on('error', (err) => reject(new Error(`Gagal tulis file: ${err.message}`)));
+      writeStream.on('finish', resolve);
+      stream.on('error', (err) => reject(new Error(err.message || 'Error stream download')));
+      writeStream.on('error', (err) => reject(new Error(err.message || 'Error file write')));
     });
 
-    // Render potong & ubah ke format 9:16
+    console.log('Mulai rendering FFmpeg (9:16 vertical)...');
+
     await new Promise((resolve, reject) => {
       ffmpeg(tempDownload)
         .setStartTime(startTime)
@@ -74,34 +77,31 @@ app.post('/render-webhook', async (req, res) => {
         ])
         .outputOptions(['-c:v libx264', '-preset ultrafast', '-c:a aac'])
         .output(outputClip)
-        .on('end', () => {
-          console.log('Rendering FFmpeg selesai!');
-          resolve();
-        })
-        .on('error', (err) => reject(new Error(`Gagal FFmpeg: ${err.message}`)))
+        .on('end', resolve)
+        .on('error', (err) => reject(new Error(err.message || 'Error FFmpeg encode')))
         .run();
     });
 
-    // Kirim file mp4 ke Telegram
     if (chatId) {
-      console.log(`Mengirim video ke chat ID: ${chatId}`);
+      console.log(`Mengirim video ke Telegram ID: ${chatId}`);
       await bot.sendVideo(chatId, outputClip, {
-        caption: `🎬 **${clipTitle}**\n⏱ Durasi: ${duration}s\n\nVideo siap diunggah ke Reels / Shorts / TikTok!`,
+        caption: `🎬 **${clipTitle}**\n⏱ Durasi: ${duration}s\n\nSiap diunggah ke Reels / Shorts / TikTok!`,
         supports_streaming: true
       });
-      console.log('Video berhasil terkirim ke Telegram!');
+      console.log('Proses selesai dan video terkirim!');
     }
 
-  } catch (error) {
-    console.error('Error proses render:', error.message);
+  } catch (err) {
+    const errorMsg = err.message || 'Terjadi kesalahan internal server';
+    console.error('Render gagal:', errorMsg);
     if (chatId) {
-      await bot.sendMessage(chatId, `❌ Gagal memproses video: ${error.message}`);
+      await bot.sendMessage(chatId, `❌ Proses gagal: ${errorMsg}`);
     }
   } finally {
-    if (fs.existsSync(tempDownload)) fs.unlinkSync(tempDownload);
-    if (fs.existsSync(outputClip)) fs.unlinkSync(outputClip);
+    if (fs.existsSync(tempDownload)) try { fs.unlinkSync(tempDownload); } catch(e){}
+    if (fs.existsSync(outputClip)) try { fs.unlinkSync(outputClip); } catch(e){}
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Worker berjalan aktif pada port ${PORT}`));
+app.listen(PORT, () => console.log(`Worker aktif pada port ${PORT}`));
