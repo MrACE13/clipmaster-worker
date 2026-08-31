@@ -88,10 +88,10 @@ app.post('/render-webhook', async (req, res) => {
     console.log(`Mulai memproses: "${clipTitle}" | URL: ${videoUrl}`);
     await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Download bypass multi-client dengan runtime JS Node
+    // Download video menggunakan yt-dlp + Deno JS Solver + Cookies resmi
     console.log('Mengunduh video via yt-dlp CLI...');
     await new Promise((resolve, reject) => {
-      const cmd = `yt-dlp ${cookieArg} --js-runtimes node --no-check-certificates --extractor-args "youtube:player_client=android_creator,android,ios,mweb" -f "b[ext=mp4]/best[ext=mp4]/best" -o "${rawDownload}" "${videoUrl}"`;
+      const cmd = `yt-dlp ${cookieArg} --no-check-certificates -f "b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/b/best" --merge-output-format mp4 -o "${rawDownload}" "${videoUrl}"`;
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
           return reject(new Error(`yt-dlp: ${stderr || error.message}`));
