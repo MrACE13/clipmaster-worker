@@ -8,9 +8,12 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
+// Format token Telegram otomatis
 const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
+// Fungsi sanitasi URL YouTube
 function cleanYouTubeUrl(rawUrl) {
   if (!rawUrl) return null;
   const str = String(rawUrl).trim();
@@ -21,19 +24,28 @@ function cleanYouTubeUrl(rawUrl) {
   return str.split('&')[0];
 }
 
-async function sendTelegramMsg(chatId, text) {
+// Fungsi pengiriman pesan teks ke Telegram
+async function sendTelegramMsg(chatId, text, replyMarkup = null) {
   if (!BOT_TOKEN || !chatId) return;
   try {
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown'
+    };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
+      body: JSON.stringify(payload)
     });
   } catch (e) {
     console.error('Gagal kirim pesan TG:', e.message);
   }
 }
 
+// Fungsi pengiriman file video MP4 ke Telegram
 async function sendTelegramVideo(chatId, videoPath, caption) {
   if (!BOT_TOKEN || !chatId) return;
   try {
@@ -58,8 +70,9 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
   }
 }
 
+// Fungsi download video dengan multi-metode (Cobalt API + yt-dlp cookies)
 async function downloadSourceVideo(videoUrl, outputPath) {
-  // Metode 1: Cobalt Stream API
+  // Metode 1: Cobalt Stream API (Bypass blokir IP data center)
   try {
     console.log('Mencoba unduh via Cobalt Stream API...');
     const res = await fetch('https://api.cobalt.tools/', {
@@ -83,7 +96,7 @@ async function downloadSourceVideo(videoUrl, outputPath) {
     console.log('Fallback ke yt-dlp internal...');
   }
 
-  // Metode 2: Fallback yt-dlp
+  // Metode 2: Fallback yt-dlp + Cookies
   const cookiePath = path.join(__dirname, 'cookies.txt');
   const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
 
@@ -98,6 +111,79 @@ async function downloadSourceVideo(videoUrl, outputPath) {
   });
 }
 
+// ============================================================================
+// ENDPOINT 1: AI Analisis 5 Klip Utuh Berdurasi Dinamis (1 - 5 Menit)
+// ============================================================================
+app.post('/analyze-video', async (req, res) => {
+  const { url, chat_id } = req.body || {};
+  const videoUrl = cleanYouTubeUrl(url);
+  res.status(200).json({ status: 'Analysis started' });
+
+  if (!videoUrl || !chat_id) return;
+
+  try {
+    await sendTelegramMsg(chat_id, '🧠 *AI sedang menyimak video dan mengkurasi 5 momen utuh (durasi 1–5 menit, tanpa terpotong)...*');
+
+    const prompt = `Anda adalah Produser Konten Edukasi & Podcast Strategis untuk masyarakat Indonesia.
+Tugas Anda: Dari video URL "${videoUrl}", temukan dan tentukan 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang kaya wawasan, edukatif, inovatif, atau bernilai inspirasi tinggi.
+
+ATURAN STRUKTUR & DURASI KLIP:
+1. JUMLAH KLIP: Tepat 5 klip dengan topik bahasan yang berbeda (tidak tumpang tindih).
+2. DURASI DINAMIS (1 - 5 MENIT): Tentukan durasi antara 60 detik (1 menit) hingga 300 detik (5 menit).
+3. BERHENTI SECARA ALAMI: Jangan memaksakan durasi. Jika poin pembahasan narasumber tuntas dalam 1 menit 30 detik atau 2 menit 45 detik, segera tentukan durasi selesai di detik tersebut.
+4. ALUR UTUH (NARRATIVE ARC): Setiap klip harus mencakup pembukaan (konteks/masalah) -> penjelasan mendalam -> kesimpulan narasumber.
+5. JANGAN MEMOTONG KALIMAT di tengah jalan.
+
+Format output WAJIB HANYA berupa JSON valid:
+{
+  "clips": [
+    {
+      "clip_number": 1,
+      "title": "Judul Klip",
+      "start_time": "00:02:15",
+      "duration": 110,
+      "topic": "Mindset / Strategi / Cerita / Solusi / Nasihat",
+      "summary": "Ringkasan pembahasan utuh.",
+      "takeaway": "Poin utama yang didapat penonton."
+    }
+  ]
+}`;
+
+    const aiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      })
+    });
+
+    const aiData = await aiRes.json();
+    const resultJson = JSON.parse(aiData.candidates[0].content.parts[0].text);
+
+    let msg = `💡 *5 Rekomendasi Klip Edukatif & Berbobot Utuh:*\n\n`;
+    resultJson.clips.forEach((clip, idx) => {
+      const menit = Math.floor(clip.duration / 60);
+      const detik = clip.duration % 60;
+      const durasiStr = menit > 0 ? `${menit}m ${detik}s` : `${detik}s`;
+
+      msg += `*${idx + 1}. [${clip.topic}] ${clip.title}*\n`;
+      msg += `⏱ Mulai: \`${clip.start_time}\` | Durasi: *${durasiStr}*\n`;
+      msg += `📖 *Pembahasan:* _${clip.summary}_\n`;
+      msg += `🎯 *Pesan Utama:* ${clip.takeaway}\n\n`;
+    });
+
+    await sendTelegramMsg(chat_id, msg);
+
+  } catch (err) {
+    console.error('Gagal analisis AI:', err.message);
+    await sendTelegramMsg(chat_id, `❌ Gagal menganalisis video: ${err.message}`);
+  }
+});
+
+// ============================================================================
+// ENDPOINT 2: Render FFmpeg (9:16 Blurred Background, Suara Utuh & Fade-Out Elegan)
+// ============================================================================
 app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
@@ -127,13 +213,14 @@ app.post('/render-webhook', async (req, res) => {
 
     await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n⏱ Durasi: *${durasiText}*\n\nMohon tunggu sekitar 1-2 menit...`);
 
+    // 1. Download video
     await downloadSourceVideo(videoUrl, rawDownload);
 
-    // Hitung titik awal fade out (1.5 detik sebelum video selesai)
+    // 2. Hitung transisi akhir (1.5 detik fade-out sebelum selesai)
     const fadeDuration = 1.5;
     const fadeStart = Math.max(0, duration - fadeDuration);
 
-    // Filter Video: 9:16 Blurred Background + Video Fade-out di akhir
+    // 3. Filter 9:16 Blurred Background + Video Fade-out
     const filterComplex = `[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg];[0:v]scale=720:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,fade=t=out:st=${fadeStart}:d=${fadeDuration}`;
 
     console.log('Mulai rendering FFmpeg (Video + Audio Utuh)...');
@@ -142,7 +229,7 @@ app.post('/render-webhook', async (req, res) => {
         .setStartTime(startTime)
         .setDuration(duration)
         .complexFilter(filterComplex)
-        .audioFilters(`afade=t=out:st=${fadeStart}:d=${fadeDuration}`) // Audio tetap menyala + Fade Out halus di akhir
+        .audioFilters(`afade=t=out:st=${fadeStart}:d=${fadeDuration}`)
         .outputOptions([
           '-c:v libx264',
           '-preset ultrafast',
@@ -159,10 +246,11 @@ app.post('/render-webhook', async (req, res) => {
         .run();
     });
 
+    // 4. Kirim video hasil ke Telegram
     await sendTelegramVideo(
       chatId,
       outputClip,
-      `🎬 *${clipTitle}*\n⏱ Durasi: *${durasiText}*\n\n✅ Suara asli jernih & transisi penutup halus siap dibagikan!`
+      `🎬 *${clipTitle}*\n⏱ Durasi: *${durasiText}*\n\n✅ Suara asli jernih & transisi penutup elegan!`
     );
 
   } catch (err) {
