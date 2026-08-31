@@ -10,6 +10,7 @@ app.use(express.json());
 
 const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 function cleanYouTubeUrl(rawUrl) {
   if (!rawUrl) return null;
@@ -21,13 +22,20 @@ function cleanYouTubeUrl(rawUrl) {
   return str.split('&')[0];
 }
 
-async function sendTelegramMsg(chatId, text) {
+async function sendTelegramMsg(chatId, text, replyMarkup = null) {
   if (!BOT_TOKEN || !chatId) return;
   try {
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown'
+    };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
+      body: JSON.stringify(payload)
     });
   } catch (e) {
     console.error('Gagal kirim pesan TG:', e.message);
@@ -51,7 +59,6 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.description || 'Gagal upload video');
-    console.log('Video sukses terkirim ke Telegram!');
   } catch (e) {
     console.error('Gagal kirim video TG:', e.message);
     await sendTelegramMsg(chatId, `❌ Gagal kirim video ke Telegram: ${e.message}`);
@@ -59,9 +66,7 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
 }
 
 async function downloadSourceVideo(videoUrl, outputPath) {
-  // Metode 1: Cobalt Stream API (Bypass Data Center IP block)
   try {
-    console.log('Mencoba unduh via Cobalt Stream API...');
     const res = await fetch('https://api.cobalt.tools/', {
       method: 'POST',
       headers: {
@@ -76,39 +81,85 @@ async function downloadSourceVideo(videoUrl, outputPath) {
       const fileStream = await fetch(data.url);
       const buffer = await fileStream.arrayBuffer();
       fs.writeFileSync(outputPath, Buffer.from(buffer));
-      console.log('Download via Cobalt berhasil!');
       return;
     }
-  } catch (e) {
-    console.log('Fallback ke yt-dlp internal...');
-  }
+  } catch (e) {}
 
-  // Metode 2: Fallback yt-dlp murni tanpa request subtitle yang memicu blokir 429
   const cookiePath = path.join(__dirname, 'cookies.txt');
   const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
 
   await new Promise((resolve, reject) => {
     const cmd = `yt-dlp ${cookieArg} --no-check-certificates -f "b[ext=mp4]/best[ext=mp4]/best" -o "${outputPath}" "${videoUrl}"`;
     exec(cmd, (error, stdout, stderr) => {
-      if (error && !fs.existsSync(outputPath)) {
-        return reject(new Error(`yt-dlp error: ${stderr || error.message}`));
-      }
+      if (error && !fs.existsSync(outputPath)) return reject(new Error(`yt-dlp: ${stderr || error.message}`));
       resolve();
     });
   });
 }
 
+// Endpoint AI Kurator: Menganalisis video & memilih klip inspiratif
+app.post('/analyze-video', async (req, res) => {
+  const { url, chat_id } = req.body || {};
+  const videoUrl = cleanYouTubeUrl(url);
+  res.status(200).json({ status: 'Analysis started' });
+
+  if (!videoUrl || !chat_id) return;
+
+  try {
+    await sendTelegramMsg(chat_id, '🧠 *AI sedang menyimak video dan mengkurasi momen paling bernilai & inspiratif...*');
+
+    const prompt = `Anda adalah ahli kurasi konten video pendek Indonesia (TikTok/Reels/Shorts).
+Tugas Anda: Dari video URL "${videoUrl}", tentukan 3 rekomendasi klip pendek (durasi 30-60 detik) yang paling kaya wawasan, edukatif, inspiratif, atau membuka pola pikir audiens Indonesia.
+
+Format output WAJIB HANYA berupa JSON valid tanpa teks pengantar:
+{
+  "clips": [
+    {
+      "title": "Judul Klip Menarik",
+      "start_time": "00:01:30",
+      "duration": 45,
+      "insight": "Poin penting yang dibahas di bagian ini."
+    }
+  ]
+}`;
+
+    const aiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      })
+    });
+
+    const aiData = await aiRes.json();
+    const resultJson = JSON.parse(aiData.candidates[0].content.parts[0].text);
+
+    // Kirim rekomendasi klip ke Telegram
+    let msg = `💡 *Rekomendasi Klip Bernilai Tinggi (AI Curated):*\n\n`;
+    resultJson.clips.forEach((clip, idx) => {
+      msg += `*${idx + 1}. ${clip.title}*\n⏱ Mulai: \`${clip.start_time}\` (${clip.duration}s)\n📌 Insight: _${clip.insight}_\n\n`;
+    });
+
+    await sendTelegramMsg(chat_id, msg);
+
+  } catch (err) {
+    console.error('Gagal analisis AI:', err.message);
+    await sendTelegramMsg(chat_id, `❌ Gagal menganalisis video: ${err.message}`);
+  }
+});
+
+// Endpoint Render FFmpeg
 app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
 
-  const rawUrl = payload.video_url || payload.source_url || payload.url || payload.clip_data?.source_url || payload.clip_data?.video_url;
+  const rawUrl = payload.video_url || payload.source_url || payload.url;
   const videoUrl = cleanYouTubeUrl(rawUrl);
   const startTime = payload.timestamps?.start_time || payload.start_time || '00:00:10';
   const duration = payload.timestamps?.duration_seconds || payload.duration || 30;
   const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
   const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
-  const aspectRatio = payload.aspect_ratio || '9:16_blur'; 
 
   if (!videoUrl) return;
 
@@ -117,43 +168,21 @@ app.post('/render-webhook', async (req, res) => {
   const outputClip = path.join(__dirname, `clip_${timestampId}.mp4`);
 
   try {
-    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\nFormat: *${aspectRatio}*\n\nMohon tunggu sekitar 1-2 menit...`);
+    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Download video sumber
     await downloadSourceVideo(videoUrl, rawDownload);
 
-    // Filter penyesuaian rasio layar
-    let filterComplex = '';
-    if (aspectRatio === '9:16_blur') {
-      // Blurred Background: Video landscape tetap utuh di tengah dengan background blur
-      filterComplex = '[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg];[0:v]scale=720:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2';
-    } else if (aspectRatio === '1:1') {
-      filterComplex = 'crop=min(iw\\,ih):min(iw\\,ih),scale=720:720';
-    } else if (aspectRatio === '16:9') {
-      filterComplex = 'scale=1280:720';
-    } else {
-      filterComplex = 'crop=ih*(9/16):ih,scale=720:1280';
-    }
+    // FFmpeg 9:16 Blurred Background
+    const filterComplex = '[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg];[0:v]scale=720:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2';
 
-    console.log('Mulai rendering FFmpeg...');
     await new Promise((resolve, reject) => {
-      let ffmpegCmd = ffmpeg(rawDownload)
+      ffmpeg(rawDownload)
         .setStartTime(startTime)
-        .setDuration(duration);
-
-      if (filterComplex.includes('[bg]')) {
-        ffmpegCmd.complexFilter(filterComplex);
-      } else {
-        ffmpegCmd.videoFilters(filterComplex);
-      }
-
-      ffmpegCmd
+        .setDuration(duration)
+        .complexFilter(filterComplex)
         .outputOptions(['-c:v libx264', '-preset ultrafast', '-c:a aac'])
         .output(outputClip)
-        .on('end', () => {
-          console.log('FFmpeg selesai!');
-          resolve();
-        })
+        .on('end', resolve)
         .on('error', (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
         .run();
     });
@@ -161,7 +190,7 @@ app.post('/render-webhook', async (req, res) => {
     await sendTelegramVideo(
       chatId,
       outputClip,
-      `🎬 *${clipTitle}*\n⏱ Durasi: ${duration}s | 📱 Rasio: ${aspectRatio}\n\nSiap diunggah ke TikTok / Reels / Shorts!`
+      `🎬 *${clipTitle}*\n⏱ Durasi: ${duration}s | 📱 Format: 9:16\n\nSiap diunggah ke TikTok / Reels / Shorts!`
     );
 
   } catch (err) {
