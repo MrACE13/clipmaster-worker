@@ -4,7 +4,7 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
-const youtubedl = require('yt-dlp-exec');
+const ytdl = require('@distube/ytdl-core');
 require('dotenv').config();
 
 const app = express();
@@ -12,14 +12,15 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
+// Normalisasi URL YouTube agar selalu terbaca valid
 function cleanYouTubeUrl(rawUrl) {
   if (!rawUrl) return null;
-  const clean = String(rawUrl).trim();
-  const match = clean.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
+  const str = String(rawUrl).trim();
+  const match = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
   if (match && match[1]) {
     return `https://www.youtube.com/watch?v=${match[1]}`;
   }
-  return clean;
+  return str.split('&')[0];
 }
 
 async function sendTelegramMsg(chatId, text) {
@@ -52,7 +53,7 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.description || 'Gagal upload video');
-    console.log('Video berhasil terkirim ke Telegram!');
+    console.log('Video sukses terkirim ke Telegram!');
   } catch (e) {
     console.error('Gagal kirim video TG:', e.message);
     await sendTelegramMsg(chatId, `❌ Gagal kirim video ke Telegram: ${e.message}`);
@@ -76,7 +77,8 @@ app.post('/render-webhook', async (req, res) => {
   const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
 
   if (!videoUrl) {
-    await sendTelegramMsg(chatId, '❌ Gagal: URL video tidak valid.');
+    console.error('video_url tidak ditemukan');
+    await sendTelegramMsg(chatId, '❌ Gagal: URL video tidak ditemukan.');
     return;
   }
 
@@ -84,24 +86,24 @@ app.post('/render-webhook', async (req, res) => {
   const outputClip = path.join(__dirname, `clip_${Date.now()}.mp4`);
 
   try {
-    console.log(`Memproses: "${clipTitle}" | URL: ${videoUrl}`);
-    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
+    console.log(`Mulai memproses: "${clipTitle}" | URL: ${videoUrl}`);
+    await sendTelegramMsg(chatId, `⏳ *Sedang memproses klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Download video menggunakan yt-dlp binary
-    console.log('Mengunduh video via yt-dlp...');
-    await youtubedl(videoUrl, {
-      output: rawDownload,
-      format: 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: [
-        'referer:youtube.com',
-        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      ]
+    // Download video dari YouTube
+    console.log('Mengunduh video stream...');
+    await new Promise((resolve, reject) => {
+      const stream = ytdl(videoUrl, {
+        quality: 'highest',
+        filter: 'audioandvideo'
+      });
+      const writeStream = fs.createWriteStream(rawDownload);
+      stream.pipe(writeStream);
+      writeStream.on('finish', resolve);
+      stream.on('error', (err) => reject(new Error(`Download error: ${err.message}`)));
+      writeStream.on('error', (err) => reject(new Error(`Write file error: ${err.message}`)));
     });
 
-    console.log('Mulai pemotongan dan konversi FFmpeg (9:16)...');
+    console.log('Mulai rendering FFmpeg (9:16 vertical)...');
     await new Promise((resolve, reject) => {
       ffmpeg(rawDownload)
         .setStartTime(startTime)
@@ -116,11 +118,11 @@ app.post('/render-webhook', async (req, res) => {
           console.log('FFmpeg selesai!');
           resolve();
         })
-        .on('error', (err) => reject(new Error(err.message || 'Error FFmpeg encode')))
+        .on('error', (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
         .run();
     });
 
-    // Kirim video hasil potong ke Telegram
+    // Kirim video hasil jadi ke Telegram
     await sendTelegramVideo(
       chatId, 
       outputClip, 
@@ -132,10 +134,10 @@ app.post('/render-webhook', async (req, res) => {
     await sendTelegramMsg(chatId, `❌ Gagal memproses video: ${err.message}`);
   } finally {
     if (fs.existsSync(rawDownload)) {
-      try { fs.unlinkSync(rawDownload); } catch (e) {}
+      try { fs.unlinkSync(rawDownload); } catch(e){}
     }
     if (fs.existsSync(outputClip)) {
-      try { fs.unlinkSync(outputClip); } catch (e) {}
+      try { fs.unlinkSync(outputClip); } catch(e){}
     }
   }
 });
