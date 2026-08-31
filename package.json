@@ -1,13 +1,14 @@
 {
-  "name": "clipmaster-bot-controller",
+  "name": "clipmaster-worker",
   "version": "1.0.0",
-  "description": "Telegram Bot Controller for ClipMaster AI",
-  "main": "bot.js",
+  "description": "ClipMaster AI All-in-One Worker & Telegram Bot",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.66.0"
+    "express": "^4.19.2",
+    "fluent-ffmpeg": "^2.1.3"
   }
 }
