@@ -1,10 +1,8 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
-ffmpeg.setFfmpegPath(ffmpegPath);
-const ytdl = require('@distube/ytdl-core');
 require('dotenv').config();
 
 const app = express();
@@ -12,7 +10,6 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-// Normalisasi URL YouTube agar selalu terbaca valid
 function cleanYouTubeUrl(rawUrl) {
   if (!rawUrl) return null;
   const str = String(rawUrl).trim();
@@ -89,18 +86,16 @@ app.post('/render-webhook', async (req, res) => {
     console.log(`Mulai memproses: "${clipTitle}" | URL: ${videoUrl}`);
     await sendTelegramMsg(chatId, `⏳ *Sedang memproses klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Download video dari YouTube
-    console.log('Mengunduh video stream...');
+    // Unduh video via yt-dlp binary bawaan Linux
+    console.log('Mengunduh video via yt-dlp CLI...');
     await new Promise((resolve, reject) => {
-      const stream = ytdl(videoUrl, {
-        quality: 'highest',
-        filter: 'audioandvideo'
+      const cmd = `yt-dlp --no-check-certificates --extractor-args "youtube:player_client=android,ios,web" -f "b[ext=mp4]/best[ext=mp4]/best" -o "${rawDownload}" "${videoUrl}"`;
+      exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+          return reject(new Error(`yt-dlp: ${stderr || error.message}`));
+        }
+        resolve();
       });
-      const writeStream = fs.createWriteStream(rawDownload);
-      stream.pipe(writeStream);
-      writeStream.on('finish', resolve);
-      stream.on('error', (err) => reject(new Error(`Download error: ${err.message}`)));
-      writeStream.on('error', (err) => reject(new Error(`Write file error: ${err.message}`)));
     });
 
     console.log('Mulai rendering FFmpeg (9:16 vertical)...');
@@ -122,7 +117,6 @@ app.post('/render-webhook', async (req, res) => {
         .run();
     });
 
-    // Kirim video hasil jadi ke Telegram
     await sendTelegramVideo(
       chatId, 
       outputClip, 
