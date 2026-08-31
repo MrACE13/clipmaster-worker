@@ -82,15 +82,16 @@ app.post('/render-webhook', async (req, res) => {
   const rawDownload = path.join(__dirname, `raw_${Date.now()}.mp4`);
   const outputClip = path.join(__dirname, `clip_${Date.now()}.mp4`);
   const cookiePath = path.join(__dirname, 'cookies.txt');
+  const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
 
   try {
     console.log(`Mulai memproses: "${clipTitle}" | URL: ${videoUrl}`);
-    await sendTelegramMsg(chatId, `⏳ *Sedang memproses klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
+    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Unduh video via yt-dlp binary bawaan Linux dengan cookies
-    console.log('Mengunduh video via yt-dlp CLI dengan Cookies...');
+    // Download bypass multi-client dengan runtime JS Node
+    console.log('Mengunduh video via yt-dlp CLI...');
     await new Promise((resolve, reject) => {
-      const cmd = `yt-dlp --cookies "${cookiePath}" --no-check-certificates -f "b[ext=mp4]/best[ext=mp4]/best" -o "${rawDownload}" "${videoUrl}"`;
+      const cmd = `yt-dlp ${cookieArg} --js-runtimes node --no-check-certificates --extractor-args "youtube:player_client=android_creator,android,ios,mweb" -f "b[ext=mp4]/best[ext=mp4]/best" -o "${rawDownload}" "${videoUrl}"`;
       exec(cmd, (error, stdout, stderr) => {
         if (error) {
           return reject(new Error(`yt-dlp: ${stderr || error.message}`));
