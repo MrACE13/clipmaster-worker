@@ -8,12 +8,12 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Format token Telegram otomatis
+// Konfigurasi Token & API Key
 const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-// Fungsi sanitasi URL YouTube
+// Fungsi pembersih URL YouTube
 function cleanYouTubeUrl(rawUrl) {
   if (!rawUrl) return null;
   const str = String(rawUrl).trim();
@@ -24,7 +24,7 @@ function cleanYouTubeUrl(rawUrl) {
   return str.split('&')[0];
 }
 
-// Fungsi pengiriman pesan teks ke Telegram
+// Fungsi kirim pesan teks ke Telegram
 async function sendTelegramMsg(chatId, text, replyMarkup = null) {
   if (!BOT_TOKEN || !chatId) return;
   try {
@@ -45,7 +45,7 @@ async function sendTelegramMsg(chatId, text, replyMarkup = null) {
   }
 }
 
-// Fungsi pengiriman file video MP4 ke Telegram
+// Fungsi kirim file video MP4 ke Telegram
 async function sendTelegramVideo(chatId, videoPath, caption) {
   if (!BOT_TOKEN || !chatId) return;
   try {
@@ -70,9 +70,8 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
   }
 }
 
-// Fungsi download video dengan multi-metode (Cobalt API + yt-dlp cookies)
+// Fungsi download video (Cobalt Stream API + Fallback yt-dlp)
 async function downloadSourceVideo(videoUrl, outputPath) {
-  // Metode 1: Cobalt Stream API (Bypass blokir IP data center)
   try {
     console.log('Mencoba unduh via Cobalt Stream API...');
     const res = await fetch('https://api.cobalt.tools/', {
@@ -96,7 +95,6 @@ async function downloadSourceVideo(videoUrl, outputPath) {
     console.log('Fallback ke yt-dlp internal...');
   }
 
-  // Metode 2: Fallback yt-dlp + Cookies
   const cookiePath = path.join(__dirname, 'cookies.txt');
   const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
 
@@ -112,7 +110,7 @@ async function downloadSourceVideo(videoUrl, outputPath) {
 }
 
 // ============================================================================
-// ENDPOINT 1: AI Analisis 5 Klip Utuh Berdurasi Dinamis (1 - 5 Menit)
+// ENDPOINT 1: AI Kurator 5 Klip + Generator Hook Pembuka Penasaran
 // ============================================================================
 app.post('/analyze-video', async (req, res) => {
   const { url, chat_id } = req.body || {};
@@ -122,29 +120,30 @@ app.post('/analyze-video', async (req, res) => {
   if (!videoUrl || !chat_id) return;
 
   try {
-    await sendTelegramMsg(chat_id, '🧠 *AI sedang menyimak video dan mengkurasi 5 momen utuh (durasi 1–5 menit, tanpa terpotong)...*');
+    await sendTelegramMsg(chat_id, '🧠 *AI sedang menyimak video, mengkurasi 5 klip utuh & merancang hook anti-skip...*');
 
-    const prompt = `Anda adalah Produser Konten Edukasi & Podcast Strategis untuk masyarakat Indonesia.
-Tugas Anda: Dari video URL "${videoUrl}", temukan dan tentukan 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang kaya wawasan, edukatif, inovatif, atau bernilai inspirasi tinggi.
+    const prompt = `Anda adalah Produser Konten Video Pendek & Ahli Viralitas Media Sosial Indonesia.
+Tugas Anda: Dari video URL "${videoUrl}", temukan 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang edukatif, inovatif, dan berbobot.
 
-ATURAN STRUKTUR & DURASI KLIP:
-1. JUMLAH KLIP: Tepat 5 klip dengan topik bahasan yang berbeda (tidak tumpang tindih).
-2. DURASI DINAMIS (1 - 5 MENIT): Tentukan durasi antara 60 detik (1 menit) hingga 300 detik (5 menit).
-3. BERHENTI SECARA ALAMI: Jangan memaksakan durasi. Jika poin pembahasan narasumber tuntas dalam 1 menit 30 detik atau 2 menit 45 detik, segera tentukan durasi selesai di detik tersebut.
-4. ALUR UTUH (NARRATIVE ARC): Setiap klip harus mencakup pembukaan (konteks/masalah) -> penjelasan mendalam -> kesimpulan narasumber.
-5. JANGAN MEMOTONG KALIMAT di tengah jalan.
+ATURAN STRUKTUR & RETENSI PENONTON:
+1. JUMLAH KLIP: Tepat 5 klip dengan topik berbeda (tidak tumpang tindih).
+2. DURASI DINAMIS (1 - 5 MENIT): Antara 60 detik (1 menit) hingga 300 detik (5 menit). Berhenti persis saat gagasan/pembahasan tuntas secara alami.
+3. ALUR UTUH: Mengandung pembukaan -> pembahasan mendalam -> kesimpulan narasumber.
+4. HOOK ANTI-SKIP: Buat 1 kalimat headline hook pembuka yang memancing rasa penasaran tinggi (curiosity gap) agar penonton tidak skip dalam 3 detik pertama.
+5. CAPTION MEDSOS: Buat caption pendek siap unggah untuk TikTok / Reels / Shorts.
 
-Format output WAJIB HANYA berupa JSON valid:
+Format output WAJIB HANYA JSON valid:
 {
   "clips": [
     {
       "clip_number": 1,
       "title": "Judul Klip",
-      "start_time": "00:02:15",
-      "duration": 110,
-      "topic": "Mindset / Strategi / Cerita / Solusi / Nasihat",
+      "start_time": "00:01:20",
+      "duration": 115,
+      "topic": "Mindset / Solusi Bisnis / Cerita Nyata / Nasihat",
+      "hook_headline": "Jangan Lakukan Ini Sebelum Usia 30! ⚠️",
       "summary": "Ringkasan pembahasan utuh.",
-      "takeaway": "Poin utama yang didapat penonton."
+      "social_caption": "Banyak yang baru sadar setelah rugi puluhan juta... Simak sampai habis! 💡 #edukasi #mindset #viral"
     }
   ]
 }`;
@@ -161,7 +160,7 @@ Format output WAJIB HANYA berupa JSON valid:
     const aiData = await aiRes.json();
     const resultJson = JSON.parse(aiData.candidates[0].content.parts[0].text);
 
-    let msg = `💡 *5 Rekomendasi Klip Edukatif & Berbobot Utuh:*\n\n`;
+    let msg = `💡 *5 Rekomendasi Klip Edukatif & Berbobot Utuh (Dengan Hook):*\n\n`;
     resultJson.clips.forEach((clip, idx) => {
       const menit = Math.floor(clip.duration / 60);
       const detik = clip.duration % 60;
@@ -169,8 +168,9 @@ Format output WAJIB HANYA berupa JSON valid:
 
       msg += `*${idx + 1}. [${clip.topic}] ${clip.title}*\n`;
       msg += `⏱ Mulai: \`${clip.start_time}\` | Durasi: *${durasiStr}*\n`;
+      msg += `🎯 *Hook Pembuka:* _"${clip.hook_headline}"_\n`;
       msg += `📖 *Pembahasan:* _${clip.summary}_\n`;
-      msg += `🎯 *Pesan Utama:* ${clip.takeaway}\n\n`;
+      msg += `📱 *Draft Caption:* \`${clip.social_caption}\`\n\n`;
     });
 
     await sendTelegramMsg(chat_id, msg);
@@ -182,7 +182,7 @@ Format output WAJIB HANYA berupa JSON valid:
 });
 
 // ============================================================================
-// ENDPOINT 2: Render FFmpeg (9:16 Blurred Background, Suara Utuh & Fade-Out Elegan)
+// ENDPOINT 2: Render FFmpeg (9:16 Blurred Background, Suara Utuh & Fade-Out)
 // ============================================================================
 app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
@@ -198,7 +198,9 @@ app.post('/render-webhook', async (req, res) => {
   const startTime = payload.timestamps?.start_time || payload.start_time || '00:00:10';
   const duration = parseInt(payload.timestamps?.duration_seconds || payload.duration || 60, 10);
   const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
-  const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
+  const clipTitle = payload.title || payload.clip_title || 'Viral Educational Clip';
+  const hookHeadline = payload.hook_headline || payload.hook || '';
+  const socialCaption = payload.social_caption || '';
 
   if (!videoUrl) return;
 
@@ -211,16 +213,16 @@ app.post('/render-webhook', async (req, res) => {
     const detik = duration % 60;
     const durasiText = menit > 0 ? `${menit}m ${detik}s` : `${detik}s`;
 
-    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n⏱ Durasi: *${durasiText}*\n\nMohon tunggu sekitar 1-2 menit...`);
+    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n⏱ Durasi: *${durasiText}*\n\nMohon tunggu sekitar 1-3 menit...`);
 
-    // 1. Download video
+    // 1. Unduh video sumber
     await downloadSourceVideo(videoUrl, rawDownload);
 
-    // 2. Hitung transisi akhir (1.5 detik fade-out sebelum selesai)
+    // 2. Hitung titik awal efek fade-out penutup (1.5 detik terakhir)
     const fadeDuration = 1.5;
     const fadeStart = Math.max(0, duration - fadeDuration);
 
-    // 3. Filter 9:16 Blurred Background + Video Fade-out
+    // 3. Filter 9:16 Blurred Background + Video Fade Out Halus
     const filterComplex = `[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg];[0:v]scale=720:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,fade=t=out:st=${fadeStart}:d=${fadeDuration}`;
 
     console.log('Mulai rendering FFmpeg (Video + Audio Utuh)...');
@@ -229,7 +231,7 @@ app.post('/render-webhook', async (req, res) => {
         .setStartTime(startTime)
         .setDuration(duration)
         .complexFilter(filterComplex)
-        .audioFilters(`afade=t=out:st=${fadeStart}:d=${fadeDuration}`)
+        .audioFilters(`afade=t=out:st=${fadeStart}:d=${fadeDuration}`) // Audio Fade-Out halus
         .outputOptions([
           '-c:v libx264',
           '-preset ultrafast',
@@ -246,12 +248,14 @@ app.post('/render-webhook', async (req, res) => {
         .run();
     });
 
-    // 4. Kirim video hasil ke Telegram
-    await sendTelegramVideo(
-      chatId,
-      outputClip,
-      `🎬 *${clipTitle}*\n⏱ Durasi: *${durasiText}*\n\n✅ Suara asli jernih & transisi penutup elegan!`
-    );
+    // 4. Siapkan format caption media sosial lengkap
+    let captionText = `🎬 *${clipTitle}*\n⏱ Durasi: *${durasiText}*\n\n`;
+    if (hookHeadline) captionText += `🎯 *Hook:* ${hookHeadline}\n\n`;
+    if (socialCaption) captionText += `📝 *Caption Medsos:* \n${socialCaption}\n\n`;
+    captionText += `✅ Siap diunggah ke TikTok / Reels / Shorts!`;
+
+    // 5. Kirim video hasil ke Telegram
+    await sendTelegramVideo(chatId, outputClip, captionText);
 
   } catch (err) {
     console.error('Proses gagal:', err.message);
