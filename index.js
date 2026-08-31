@@ -57,6 +57,50 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
   }
 }
 
+// Fungsi pengunduh video otomatis dengan fallback multi-metode
+async function downloadSourceVideo(videoUrl, outputPath) {
+  // Metode 1: Coba via Cobalt API (Bypass IP Block)
+  try {
+    console.log('Mencoba unduh via Cobalt Stream API...');
+    const res = await fetch('https://api.cobalt.tools/', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      body: JSON.stringify({
+        url: videoUrl,
+        videoQuality: '720',
+        filenameStyle: 'basic'
+      })
+    });
+
+    const data = await res.json();
+    if (data && data.url) {
+      const fileStream = await fetch(data.url);
+      const buffer = await fileStream.arrayBuffer();
+      fs.writeFileSync(outputPath, Buffer.from(buffer));
+      console.log('Download via Cobalt berhasil!');
+      return;
+    }
+  } catch (e) {
+    console.log('Fallback ke yt-dlp internal...');
+  }
+
+  // Metode 2: Fallback ke yt-dlp CLI
+  const cookiePath = path.join(__dirname, 'cookies.txt');
+  const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
+
+  await new Promise((resolve, reject) => {
+    const cmd = `yt-dlp ${cookieArg} --no-check-certificates -f "b[ext=mp4]/best[ext=mp4]/best" -o "${outputPath}" "${videoUrl}"`;
+    exec(cmd, (error, stdout, stderr) => {
+      if (error) return reject(new Error(`yt-dlp error: ${stderr || error.message}`));
+      resolve();
+    });
+  });
+}
+
 app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
@@ -81,25 +125,15 @@ app.post('/render-webhook', async (req, res) => {
 
   const rawDownload = path.join(__dirname, `raw_${Date.now()}.mp4`);
   const outputClip = path.join(__dirname, `clip_${Date.now()}.mp4`);
-  const cookiePath = path.join(__dirname, 'cookies.txt');
-  const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
 
   try {
     console.log(`Mulai memproses: "${clipTitle}" | URL: ${videoUrl}`);
     await sendTelegramMsg(chatId, `⏳ *Sedang merender klip:*\n"${clipTitle}"\n\nMohon tunggu sekitar 1-2 menit...`);
 
-    // Download video menggunakan yt-dlp + Deno JS Solver + Cookies resmi
-    console.log('Mengunduh video via yt-dlp CLI...');
-    await new Promise((resolve, reject) => {
-      const cmd = `yt-dlp ${cookieArg} --no-check-certificates -f "b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/b/best" --merge-output-format mp4 -o "${rawDownload}" "${videoUrl}"`;
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          return reject(new Error(`yt-dlp: ${stderr || error.message}`));
-        }
-        resolve();
-      });
-    });
+    // Download video
+    await downloadSourceVideo(videoUrl, rawDownload);
 
+    // Pemotongan & format 9:16
     console.log('Mulai rendering FFmpeg (9:16 vertical)...');
     await new Promise((resolve, reject) => {
       ffmpeg(rawDownload)
@@ -129,12 +163,8 @@ app.post('/render-webhook', async (req, res) => {
     console.error('Proses gagal:', err.message);
     await sendTelegramMsg(chatId, `❌ Gagal memproses video: ${err.message}`);
   } finally {
-    if (fs.existsSync(rawDownload)) {
-      try { fs.unlinkSync(rawDownload); } catch(e){}
-    }
-    if (fs.existsSync(outputClip)) {
-      try { fs.unlinkSync(outputClip); } catch(e){}
-    }
+    if (fs.existsSync(rawDownload)) try { fs.unlinkSync(rawDownload); } catch(e){}
+    if (fs.existsSync(outputClip)) try { fs.unlinkSync(outputClip); } catch(e){}
   }
 });
 
