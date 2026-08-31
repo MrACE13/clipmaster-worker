@@ -4,7 +4,7 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
-const ytdl = require('@distube/ytdl-core');
+const play = require('play-dl');
 const TelegramBot = require('node-telegram-bot-api');
 require('dotenv').config();
 
@@ -17,7 +17,6 @@ app.post('/render-webhook', async (req, res) => {
   const payload = req.body || {};
   res.status(200).json({ status: 'Processing started' });
 
-  // Cari fallback URL jika bersarang di dalam clip_data atau root
   const videoUrl = payload.video_url || 
                    payload.source_url || 
                    payload.url || 
@@ -30,45 +29,23 @@ app.post('/render-webhook', async (req, res) => {
   const clipTitle = payload.title || payload.clip_title || 'Viral Clip';
 
   if (!videoUrl) {
-    console.error('ERROR: video_url tidak ditemukan pada payload');
-    if (chatId) {
-      await bot.sendMessage(chatId, '❌ Gagal: Tautan video (URL) tidak terlampir dalam perintah render.');
-    }
+    if (chatId) await bot.sendMessage(chatId, '❌ Gagal: URL video tidak ditemukan.');
     return;
   }
 
-  const tempDownload = path.join(__dirname, `raw_${Date.now()}.mp4`);
   const outputClip = path.join(__dirname, `clip_${Date.now()}.mp4`);
 
   try {
     if (chatId) {
-      await bot.sendMessage(chatId, `⏳ Sedang mengunduh dan memotong: "${clipTitle}"\nMohon tunggu 1-2 menit...`);
+      await bot.sendMessage(chatId, `⏳ Sedang memproses klip: "${clipTitle}"\nMohon tunggu 1-2 menit...`);
     }
 
-    console.log(`Mengunduh stream: ${videoUrl}`);
+    console.log(`Mengambil stream YouTube: ${videoUrl}`);
+    const sourceStream = await play.stream(videoUrl, { quality: 1 });
 
+    console.log('Mulai rendering dan pemotongan FFmpeg...');
     await new Promise((resolve, reject) => {
-      const stream = ytdl(videoUrl, {
-        quality: 'highest',
-        filter: 'audioandvideo',
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          }
-        }
-      });
-
-      const writeStream = fs.createWriteStream(tempDownload);
-      stream.pipe(writeStream);
-      writeStream.on('finish', resolve);
-      stream.on('error', (err) => reject(new Error(err.message || 'Error stream download')));
-      writeStream.on('error', (err) => reject(new Error(err.message || 'Error file write')));
-    });
-
-    console.log('Mulai rendering FFmpeg (9:16 vertical)...');
-
-    await new Promise((resolve, reject) => {
-      ffmpeg(tempDownload)
+      ffmpeg(sourceStream.stream)
         .setStartTime(startTime)
         .setDuration(duration)
         .videoFilters([
@@ -78,28 +55,27 @@ app.post('/render-webhook', async (req, res) => {
         .outputOptions(['-c:v libx264', '-preset ultrafast', '-c:a aac'])
         .output(outputClip)
         .on('end', resolve)
-        .on('error', (err) => reject(new Error(err.message || 'Error FFmpeg encode')))
+        .on('error', (err) => reject(new Error(err.message)))
         .run();
     });
 
     if (chatId) {
-      console.log(`Mengirim video ke Telegram ID: ${chatId}`);
+      console.log(`Mengirim video ke Telegram (${chatId})...`);
       await bot.sendVideo(chatId, outputClip, {
         caption: `🎬 **${clipTitle}**\n⏱ Durasi: ${duration}s\n\nSiap diunggah ke Reels / Shorts / TikTok!`,
         supports_streaming: true
       });
-      console.log('Proses selesai dan video terkirim!');
+      console.log('Selesai! Video berhasil terkirim.');
     }
-
   } catch (err) {
-    const errorMsg = err.message || 'Terjadi kesalahan internal server';
-    console.error('Render gagal:', errorMsg);
+    console.error('Error saat render:', err.message);
     if (chatId) {
-      await bot.sendMessage(chatId, `❌ Proses gagal: ${errorMsg}`);
+      await bot.sendMessage(chatId, `❌ Proses gagal: ${err.message}`);
     }
   } finally {
-    if (fs.existsSync(tempDownload)) try { fs.unlinkSync(tempDownload); } catch(e){}
-    if (fs.existsSync(outputClip)) try { fs.unlinkSync(outputClip); } catch(e){}
+    if (fs.existsSync(outputClip)) {
+      try { fs.unlinkSync(outputClip); } catch (e) {}
+    }
   }
 });
 
