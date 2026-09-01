@@ -32,7 +32,7 @@ function parseTimeToSeconds(timeInput) {
 function formatSeconds(sec) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
 // Pembersih URL YouTube
@@ -41,7 +41,7 @@ function cleanYouTubeUrl(rawUrl) {
   const str = String(rawUrl).trim();
   const match = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
   if (match && match[1]) {
-    return `[https://www.youtube.com/watch?v=$](https://www.youtube.com/watch?v=$){match[1]}`;
+    return 'https://www.youtube.com/watch?v=' + match[1];
   }
   return str.split('&')[0];
 }
@@ -57,7 +57,8 @@ async function sendTelegramMsg(chatId, text, replyMarkup = null) {
     };
     if (replyMarkup) payload.reply_markup = replyMarkup;
 
-    await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){BOT_TOKEN}/sendMessage`, {
+    const url = 'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage';
+    await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -71,7 +72,8 @@ async function sendTelegramMsg(chatId, text, replyMarkup = null) {
 async function answerCallback(callbackQueryId, text = '') {
   if (!BOT_TOKEN || !callbackQueryId) return;
   try {
-    await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){BOT_TOKEN}/answerCallbackQuery`, {
+    const url = 'https://api.telegram.org/bot' + BOT_TOKEN + '/answerCallbackQuery';
+    await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ callback_query_id: callbackQueryId, text: text })
@@ -91,7 +93,8 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     formData.append('caption', caption);
     formData.append('supports_streaming', 'true');
 
-    const res = await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){BOT_TOKEN}/sendVideo`, {
+    const url = 'https://api.telegram.org/bot' + BOT_TOKEN + '/sendVideo';
+    const res = await fetch(url, {
       method: 'POST',
       body: formData
     });
@@ -100,7 +103,7 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     console.log('Video sukses terkirim ke Telegram!');
   } catch (e) {
     console.error('Gagal kirim video TG:', e.message);
-    await sendTelegramMsg(chatId, `❌ Gagal kirim video ke Telegram: ${e.message}`);
+    await sendTelegramMsg(chatId, '❌ Gagal kirim video ke Telegram: ' + e.message);
   }
 }
 
@@ -108,7 +111,7 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
 async function downloadSourceVideo(videoUrl, outputPath) {
   try {
     console.log('Mencoba unduh via Cobalt Stream API...');
-    const res = await fetch('[https://api.cobalt.tools/](https://api.cobalt.tools/)', {
+    const res = await fetch('https://api.cobalt.tools/', {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -130,13 +133,13 @@ async function downloadSourceVideo(videoUrl, outputPath) {
   }
 
   const cookiePath = path.join(__dirname, 'cookies.txt');
-  const cookieArg = fs.existsSync(cookiePath) ? `--cookies "${cookiePath}"` : '';
+  const cookieArg = fs.existsSync(cookiePath) ? '--cookies "' + cookiePath + '"' : '';
 
   await new Promise((resolve, reject) => {
-    const cmd = `yt-dlp ${cookieArg} --no-check-certificates -f "b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/b/best" --merge-output-format mp4 -o "${outputPath}" "${videoUrl}"`;
+    const cmd = 'yt-dlp ' + cookieArg + ' --no-check-certificates -f "b[ext=mp4]/bv*[ext=mp4]+ba[ext=m4a]/b/best" --merge-output-format mp4 -o "' + outputPath + '" "' + videoUrl + '"';
     exec(cmd, (error, stdout, stderr) => {
       if (error && !fs.existsSync(outputPath)) {
-        return reject(new Error(`yt-dlp error: ${stderr || error.message}`));
+        return reject(new Error('yt-dlp error: ' + (stderr || error.message)));
       }
       resolve();
     });
@@ -148,12 +151,13 @@ async function downloadSourceVideo(videoUrl, outputPath) {
 // ============================================================================
 async function generateKaraokeSubtitles(rawVideoPath, startSec, durSec, outputAssPath) {
   if (!GEMINI_API_KEY) return false;
-  const tempAudioPath = path.join(__dirname, `temp_audio_${Date.now()}.mp3`);
+  const tempAudioPath = path.join(__dirname, 'temp_audio_' + Date.now() + '.mp3');
 
   try {
     console.log('Mengekstrak audio klip untuk AI Subtitle...');
     await new Promise((resolve, reject) => {
-      exec(`ffmpeg -y -ss ${startSec} -t ${durSec} -i "${rawVideoPath}" -vn -acodec libmp3lame -b:a 128k -ar 44100 "${tempAudioPath}"`, (err) => {
+      const cmd = 'ffmpeg -y -ss ' + startSec + ' -t ' + durSec + ' -i "' + rawVideoPath + '" -vn -acodec libmp3lame -b:a 128k -ar 44100 "' + tempAudioPath + '"';
+      exec(cmd, (err) => {
         if (err || !fs.existsSync(tempAudioPath)) return reject(err);
         resolve();
       });
@@ -162,35 +166,22 @@ async function generateKaraokeSubtitles(rawVideoPath, startSec, durSec, outputAs
     console.log('Mengirim audio ke Gemini untuk pembuatan Subtitle Karaoke...');
     const audioData = fs.readFileSync(tempAudioPath).toString('base64');
 
-    const prompt = `Dengarkan audio podcast bahasa Indonesia ini. Buat transkripsi subtitle format ASS (Advanced Substation Alpha) bergaya video pendek viral (TikTok/Reels).
+    const prompt = 'Dengarkan audio podcast bahasa Indonesia ini. Buat transkripsi subtitle format ASS (Advanced Substation Alpha) bergaya video pendek viral (TikTok/Reels).\n\n' +
+      'ATURAN SUBTITLE:\n' +
+      '1. Bagi per baris menjadi frasa pendek (2 - 4 kata per baris) agar mudah dibaca cepat.\n' +
+      '2. Berikan highlight kata aktif menggunakan tag warna kuning: {\\c&H0000FFFF&}KATA AKTIF{\\c&H00FFFFFF&}.\n' +
+      '3. Tepatkan waktu start dan end persis sesuai audio (waktu relatif dari 0:00:00.00 hingga akhir klip).\n' +
+      '4. Pastikan teks menggunakan bahasa Indonesia yang rapi.\n\n' +
+      'Format output WAJIB HANYA berupa struktur file ASS utuh.';
 
-ATURAN SUBTITLE:
-1. Bagi per baris menjadi frasa pendek (2 - 4 kata per baris) agar mudah dibaca cepat.
-2. Berikan highlight kata aktif menggunakan tag warna kuning: {\\c&H0000FFFF&}KATA AKTIF{\\c&H00FFFFFF&}.
-3. Tepatkan waktu start dan end persis sesuai audio (waktu relatif dari 0:00:00.00 hingga akhir klip).
-4. Pastikan teks menggunakan bahasa Indonesia yang rapi.
-
-Format output WAJIB HANYA berupa struktur ASS utuh seperti contoh berikut:
-[Script Info]
-ScriptType: v4.00+
-PlayResX: 720
-PlayResY: 1280
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,24,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,20,20,200
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:01.80,Default,,0,0,0,,{\\c&H0000FFFF&}JANGAN PERNAH{\\c&H00FFFFFF&} lakukan ini`;
-
-    const aiRes = await fetch(`[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$){GEMINI_API_KEY}`, {
+    const aiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + GEMINI_API_KEY;
+    const aiRes = await fetch(aiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{
           parts: [
-            { inline_data: { mime_type: "audio/mp3", data: audioData } },
+            { inline_data: { mime_type: 'audio/mp3', data: audioData } },
             { text: prompt }
           ]
         }]
@@ -225,16 +216,16 @@ async function executeRenderJob(params) {
   const durSec = Math.max(20, parseTimeToSeconds(durationRaw));
 
   const timestampId = Date.now();
-  const rawDownload = path.join(__dirname, `raw_${timestampId}.mp4`);
-  const outputClip = path.join(__dirname, `clip_${timestampId}.mp4`);
-  const assSubtitlePath = path.join(__dirname, `sub_${timestampId}.ass`);
+  const rawDownload = path.join(__dirname, 'raw_' + timestampId + '.mp4');
+  const outputClip = path.join(__dirname, 'clip_' + timestampId + '.mp4');
+  const assSubtitlePath = path.join(__dirname, 'sub_' + timestampId + '.ass');
 
   try {
     const totalMenit = Math.floor(durSec / 60);
     const totalDetik = durSec % 60;
-    const durasiText = totalMenit > 0 ? `${totalMenit}m ${totalDetik}s` : `${totalDetik}s`;
+    const durasiText = totalMenit > 0 ? totalMenit + 'm ' + totalDetik + 's' : totalDetik + 's';
 
-    await sendTelegramMsg(chatId, `⏳ *Sedang merender klip tingkat studio:*\n"${clipTitle}"\n⏱ Durasi: *${durasiText}*\n🎨 *Fitur Aktif:* Visual Sharpening + Audio Mastering EBU R128 + AI Subtitle Karaoke\n\nMohon tunggu sekitar 1-3 menit...`);
+    await sendTelegramMsg(chatId, '⏳ *Sedang merender klip tingkat studio:*\n"' + clipTitle + '"\n⏱ Durasi: *' + durasiText + '*\n🎨 *Fitur Aktif:* Visual Sharpening + Audio Mastering EBU R128 + AI Subtitle Karaoke\n\nMohon tunggu sekitar 1-3 menit...');
 
     // 1. Download video sumber
     await downloadSourceVideo(videoUrl, rawDownload);
@@ -248,57 +239,48 @@ async function executeRenderJob(params) {
     const outroFadeDur = 1.5;
     const outroFadeStart = Math.max(0, durSec - outroFadeDur);
 
-    // Filter Peningkatan Visual Studio (Penajaman & Warna Pop)
+    // Filter Visual & Subtitle
     const visualEnhance = 'unsharp=5:5:0.8:5:5:0.0,eq=contrast=1.08:brightness=0.02:saturation=1.18';
-
-    // Subtitle filter
     let subFilterPart = '';
     if (hasSubtitles) {
       const sanitizedAss = assSubtitlePath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      subFilterPart = `,subtitles='${sanitizedAss}'`;
+      subFilterPart = ',subtitles=\'' + sanitizedAss + '\'';
     }
 
-    // Bangun Filter Complex FFmpeg
     const filterComplex = 
-      // Teaser 3.5 detik (Detik 0-3s)
-      `[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg0];` +
-      `[0:v]scale=720:-1[fg0];` +
-      `[bg0][fg0]overlay=(W-w)/2:(H-h)/2,${visualEnhance},fade=t=out:st=${teaserDur - 0.4}:d=0.4,fps=30,format=yuv420p[v0];` +
-      `[0:a]afade=t=out:st=${teaserDur - 0.4}:d=0.4,aformat=sample_rates=44100:channel_layouts=stereo[a0];` +
-      
-      // Video Utama Pembahasan Penuh + Subtitle Karaoke
-      `[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg1];` +
-      `[1:v]scale=720:-1[fg1];` +
-      `[bg1][fg1]overlay=(W-w)/2:(H-h)/2,${visualEnhance}${subFilterPart},fade=t=in:st=0:d=0.4,fade=t=out:st=${outroFadeStart}:d=${outroFadeDur},fps=30,format=yuv420p[v1];` +
-      `[1:a]highpass=f=60,lowpass=f=14000,loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4,afade=t=out:st=${outroFadeStart}:d=${outroFadeDur},aformat=sample_rates=44100:channel_layouts=stereo[a1];` +
-      
-      // Concat Teaser + Klip Utama
-      `[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]`;
+      '[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg0];' +
+      '[0:v]scale=720:-1[fg0];' +
+      '[bg0][fg0]overlay=(W-w)/2:(H-h)/2,' + visualEnhance + ',fade=t=out:st=' + (teaserDur - 0.4) + ':d=0.4,fps=30,format=yuv420p[v0];' +
+      '[0:a]afade=t=out:st=' + (teaserDur - 0.4) + ':d=0.4,aformat=sample_rates=44100:channel_layouts=stereo[a0];' +
+      '[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg1];' +
+      '[1:v]scale=720:-1[fg1];' +
+      '[bg1][fg1]overlay=(W-w)/2:(H-h)/2,' + visualEnhance + subFilterPart + ',fade=t=in:st=0:d=0.4,fade=t=out:st=' + outroFadeStart + ':d=' + outroFadeDur + ',fps=30,format=yuv420p[v1];' +
+      '[1:a]highpass=f=60,lowpass=f=14000,loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4,afade=t=out:st=' + outroFadeStart + ':d=' + outroFadeDur + ',aformat=sample_rates=44100:channel_layouts=stereo[a1];' +
+      '[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]';
 
     console.log('Mulai rendering FFmpeg Studio Grade...');
-    const ffmpegCmd = `ffmpeg -y -ss ${teaserStartSec} -t ${teaserDur} -i "${rawDownload}" -ss ${startSec} -t ${durSec} -i "${rawDownload}" -filter_complex "${filterComplex}" -map "[outv]" -map "[outa]" -c:v libx264 -preset ultrafast -c:a aac -b:a 192k -movflags +faststart "${outputClip}"`;
+    const ffmpegCmd = 'ffmpeg -y -ss ' + teaserStartSec + ' -t ' + teaserDur + ' -i "' + rawDownload + '" -ss ' + startSec + ' -t ' + durSec + ' -i "' + rawDownload + '" -filter_complex "' + filterComplex + '" -map "[outv]" -map "[outa]" -c:v libx264 -preset ultrafast -c:a aac -b:a 192k -movflags +faststart "' + outputClip + '"';
 
     await new Promise((resolve, reject) => {
       exec(ffmpegCmd, (error, stdout, stderr) => {
         if (error || !fs.existsSync(outputClip)) {
-          return reject(new Error(`FFmpeg error: ${stderr || error.message}`));
+          return reject(new Error('FFmpeg error: ' + (stderr || error.message)));
         }
         console.log('FFmpeg render berhasil!');
         resolve();
       });
     });
 
-    // Format caption Telegram
-    let captionText = `🎬 *${clipTitle}*\n⏱ Durasi: *${durasiText}*\n\n`;
-    if (hookHeadline) captionText += `🎯 *Hook:* ${hookHeadline}\n\n`;
-    if (socialCaption) captionText += `📝 *Caption Medsos:* \n${socialCaption}\n\n`;
-    captionText += `✨ *Kualitas Studio:* Visual Sharp & Vibrant | Audio EBU R128 | Subtitle Karaoke AI!`;
+    let captionText = '🎬 *' + clipTitle + '*\n⏱ Durasi: *' + durasiText + '*\n\n';
+    if (hookHeadline) captionText += '🎯 *Hook:* ' + hookHeadline + '\n\n';
+    if (socialCaption) captionText += '📝 *Caption Medsos:* \n' + socialCaption + '\n\n';
+    captionText += '✨ *Kualitas Studio:* Visual Sharp & Vibrant | Audio EBU R128 | Subtitle Karaoke AI!';
 
     await sendTelegramVideo(chatId, outputClip, captionText);
 
   } catch (err) {
     console.error('Proses gagal:', err.message);
-    await sendTelegramMsg(chatId, `❌ Gagal memproses video: ${err.message}`);
+    await sendTelegramMsg(chatId, '❌ Gagal memproses video: ' + err.message);
   } finally {
     const cleanupFiles = [rawDownload, outputClip, assSubtitlePath];
     cleanupFiles.forEach(f => {
@@ -314,40 +296,39 @@ async function handleAnalyzeAndSend5Clips(chatId, videoUrl) {
   try {
     await sendTelegramMsg(chatId, '🧠 *AI sedang menyimak video dan mengkurasi 5 klip edukatif berbobot (1–5 menit tanpa terpotong)...*\nMohon tunggu sekitar 15–30 detik.');
 
-    const prompt = `Anda adalah Produser Konten Video Pendek & Ahli Viralitas Media Sosial Indonesia.
-Tugas Anda: Dari video URL "${videoUrl}", temukan dan kurasi MINIMAL 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang kaya wawasan, edukatif, inovatif, atau bernilai inspirasi tinggi.
+    const prompt = 'Anda adalah Produser Konten Video Pendek & Ahli Viralitas Media Sosial Indonesia.\n' +
+      'Tugas Anda: Dari video URL "' + videoUrl + '", temukan dan kurasi MINIMAL 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang kaya wawasan, edukatif, inovatif, atau bernilai inspirasi tinggi.\n\n' +
+      'ATURAN WAJIB:\n' +
+      '1. JUMLAH KLIP: Tepat 5 klip pilihan (Clip #1 sampai Clip #5) dengan topik bahasan berbeda (tidak saling tumpang tindih).\n' +
+      '2. DURASI DINAMIS (1 - 5 MENIT): Tentukan durasi antara 60 detik (1 menit) hingga 300 detik (5 menit). Berhenti persis saat gagasan/pembahasan narasumber tuntas secara alami.\n' +
+      '3. ALUR LENGKAP: Mengandung pembukaan konteks -> pembahasan mendalam -> kesimpulan tuntas dari narasumber. Jangan memotong kalimat di tengah jalan.\n' +
+      '4. METADATA MEDSOS: Buat hook headline, tags, draft caption medsos, dan perkiraan reach.\n\n' +
+      'Format output WAJIB HANYA JSON valid:\n' +
+      '{\n' +
+      '  "clips": [\n' +
+      '    {\n' +
+      '      "clip_number": 1,\n' +
+      '      "title": "Judul Klip Menarik",\n' +
+      '      "start_time": "00:01:20",\n' +
+      '      "duration": 120,\n' +
+      '      "virality_score": 88,\n' +
+      '      "topic": "Mindset / Solusi / Kisah Nyata / Tips Bisnis",\n' +
+      '      "hook_reason": "Menjelaskan prinsip penting yang sering diabaikan.",\n' +
+      '      "tags": "#mindset #bisnis #edukasi",\n' +
+      '      "social_tiktok": "Pola pikir penting yang jarang dibahas... #fyp #viral #bisnis",\n' +
+      '      "social_shorts": "Wawasan penting hari ini #shorts #edukasi",\n' +
+      '      "reach": "1K-10K"\n' +
+      '    }\n' +
+      '  ]\n' +
+      '}';
 
-ATURAN WAJIB:
-1. JUMLAH KLIP: Tepat 5 klip pilihan (Clip #1 sampai Clip #5) dengan topik bahasan berbeda (tidak saling tumpang tindih).
-2. DURASI DINAMIS (1 - 5 MENIT): Tentukan durasi antara 60 detik (1 menit) hingga 300 detik (5 menit). Berhenti persis saat gagasan/pembahasan narasumber tuntas secara alami.
-3. ALUR LENGKAP: Mengandung pembukaan konteks -> pembahasan mendalam -> kesimpulan tuntas dari narasumber. Jangan memotong kalimat di tengah jalan.
-4. METADATA MEDSOS: Buat hook headline, tags, draft caption medsos, dan perkiraan reach.
-
-Format output WAJIB HANYA JSON valid:
-{
-  "clips": [
-    {
-      "clip_number": 1,
-      "title": "Judul Klip Menarik",
-      "start_time": "00:01:20",
-      "duration": 120,
-      "virality_score": 88,
-      "topic": "Mindset / Solusi / Kisah Nyata / Tips Bisnis",
-      "hook_reason": "Menjelaskan prinsip penting yang sering diabaikan.",
-      "tags": "#mindset #bisnis #edukasi",
-      "social_tiktok": "Pola pikir penting yang jarang dibahas... #fyp #viral #bisnis",
-      "social_shorts": "Wawasan penting hari ini #shorts #edukasi",
-      "reach": "1K-10K"
-    }
-  ]
-}`;
-
-    const aiRes = await fetch(`[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$){GEMINI_API_KEY}`, {
+    const aiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + GEMINI_API_KEY;
+    const aiRes = await fetch(aiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        generationConfig: { responseMimeType: 'application/json' }
       })
     });
 
@@ -371,33 +352,25 @@ Format output WAJIB HANYA JSON valid:
 
       const m = Math.floor(clip.duration / 60);
       const s = clip.duration % 60;
-      const durText = m > 0 ? `${m}m ${s}s` : `${s}s`;
+      const durText = m > 0 ? m + 'm ' + s + 's' : s + 's';
 
       const cardMessage = 
-`🎬 *Clip #${clip.clip_number}*
-*${clip.title}*
-
-⏱ \`${startFormatted} → ${endFormatted}\` (*${durText}*)
-⚡ Virality: *${clip.virality_score || 85}/100*
-📱 Format: *9:16 (Studio Quality)*
-
-💡 _${clip.hook_reason}_
-
-🏷 ${clip.tags || '#edukasi #viral'}
-
-📱 *TikTok / Reels:*
-${clip.social_tiktok || 'Simak pembahasannya! #fyp'}
-
-▶️ *YouTube Shorts:*
-${clip.social_shorts || 'Poin penting dari video ini #shorts'}
-
-🎨 Visual: Teaser 0-3s + Color Pop + Subtitle Karaoke AI
-📊 Reach: *${clip.reach || '1K-10K'}*`;
+        '🎬 *Clip #' + clip.clip_number + '*\n' +
+        '*' + clip.title + '*\n\n' +
+        '⏱ `' + startFormatted + ' → ' + endFormatted + '` (*' + durText + '*)\n' +
+        '⚡ Virality: *' + (clip.virality_score || 85) + '/100*\n' +
+        '📱 Format: *9:16 (Studio Quality)*\n\n' +
+        '💡 _' + clip.hook_reason + '_\n\n' +
+        '🏷 ' + (clip.tags || '#edukasi #viral') + '\n\n' +
+        '📱 *TikTok / Reels:*\n' + (clip.social_tiktok || 'Simak pembahasannya! #fyp') + '\n\n' +
+        '▶️ *YouTube Shorts:*\n' + (clip.social_shorts || 'Poin penting dari video ini #shorts') + '\n\n' +
+        '🎨 Visual: Teaser 0-3s + Color Pop + Subtitle Karaoke AI\n' +
+        '📊 Reach: *' + (clip.reach || '1K-10K') + '*';
 
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '🎥 Render Clip', callback_data: `render_${clip.clip_number}` },
+            { text: '🎥 Render Clip', callback_data: 'render_' + clip.clip_number },
             { text: '📱 Open in App', url: videoUrl }
           ]
         ]
@@ -408,7 +381,7 @@ ${clip.social_shorts || 'Poin penting dari video ini #shorts'}
 
   } catch (err) {
     console.error('Gagal analisis AI:', err.message);
-    await sendTelegramMsg(chatId, `❌ Gagal menganalisis video: ${err.message}`);
+    await sendTelegramMsg(chatId, '❌ Gagal menganalisis video: ' + err.message);
   }
 }
 
@@ -425,7 +398,8 @@ async function startTelegramPolling() {
 
   while (true) {
     try {
-      const res = await fetch(`[https://api.telegram.org/bot$](https://api.telegram.org/bot$){BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=25`);
+      const pollUrl = 'https://api.telegram.org/bot' + BOT_TOKEN + '/getUpdates?offset=' + (lastUpdateId + 1) + '&timeout=25';
+      const res = await fetch(pollUrl);
       const data = await res.json();
 
       if (data.ok && Array.isArray(data.result)) {
@@ -461,7 +435,7 @@ async function startTelegramPolling() {
               const clipNum = parseInt(dataStr.replace('render_', ''), 10);
               const cached = clipsMemoryCache.get(String(chatId));
 
-              await answerCallback(cb.id, `✅ Memulai render Klip #${clipNum}...`);
+              await answerCallback(cb.id, '✅ Memulai render Klip #' + clipNum + '...');
 
               if (!cached || !cached.clips) {
                 await sendTelegramMsg(chatId, '⚠️ Data klip sudah kedaluwarsa. Silakan kirim ulang link videonya.');
@@ -474,7 +448,7 @@ async function startTelegramPolling() {
                 continue;
               }
 
-              await sendTelegramMsg(chatId, `✅ *Render job queued!*\n\nClip #${clipNum} sedang diproses dengan peningkatan visual & audio studio.`);
+              await sendTelegramMsg(chatId, '✅ *Render job queued!*\n\nClip #' + clipNum + ' sedang diproses dengan peningkatan visual & audio studio.');
 
               executeRenderJob({
                 videoUrl: cached.videoUrl,
@@ -526,6 +500,6 @@ app.post('/render-webhook', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Worker aktif pada port ${PORT}`);
+  console.log('Worker aktif pada port ' + PORT);
   startTelegramPolling();
 });
