@@ -32,12 +32,13 @@ const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-// Penyimpanan cache data klip
+// Penyimpanan cache data klip & Chat ID pengguna terakhir
 const clipsMemoryCache = new Map();
+let lastActiveChatId = process.env.DEFAULT_TELEGRAM_CHAT_ID || null;
 
 // Route dasar untuk cek status server
 app.get('/', (req, res) => {
-  res.send('ClipMaster AI Worker & Studio Engine Online!');
+  res.send('ClipMaster AI Worker & Studio Engine Online! Active Telegram Chat ID: ' + (lastActiveChatId || 'Belum terdeteksi'));
 });
 
 // Helper konversi waktu ke detik
@@ -107,8 +108,12 @@ async function answerCallback(callbackQueryId, text = '') {
 
 // Kirim video MP4 ke Telegram
 async function sendTelegramVideo(chatId, videoPath, caption) {
-  if (!BOT_TOKEN || !chatId) return;
+  if (!BOT_TOKEN || !chatId) {
+    console.log('Pengiriman video dibatalkan karena Chat ID tidak ditemukan.');
+    return;
+  }
   try {
+    console.log('Mengunggah video ke Telegram Chat ID: ' + chatId + '...');
     const fileBuffer = fs.readFileSync(videoPath);
     const blob = new Blob([fileBuffer], { type: 'video/mp4' });
     const formData = new FormData();
@@ -305,6 +310,8 @@ async function executeRenderJob(params) {
       captionText += '✨ *Kualitas Studio:* Visual Sharp & Vibrant | Audio EBU R128 | Subtitle Karaoke AI!';
 
       await sendTelegramVideo(chatId, outputClip, captionText);
+    } else {
+      console.log('[PERINGATAN] Video berhasil dibuat, namun Chat ID Telegram belum terdaftar. Silakan kirim /start ke bot Telegram Anda terlebih dahulu.');
     }
 
   } catch (err) {
@@ -448,12 +455,14 @@ async function startTelegramPolling() {
 
           if (update.message && update.message.text) {
             const chatId = update.message.chat.id;
+            lastActiveChatId = chatId; // Otomatis mengunci Chat ID aktif
+
             const text = update.message.text.trim();
 
             if (text.startsWith('/start')) {
               await sendTelegramMsg(
                 chatId,
-                '👋 *Selamat datang di ClipMaster AI Studio!*\n\nKirimkan link video YouTube/Podcast ke sini. AI akan mengkurasi *5 klip terbaik berdurasi dinamis (1–5 menit)* lengkap dengan subtitle karaoke dan peningkatan kualitas studio.'
+                '👋 *Selamat datang di ClipMaster AI Studio!*\n\n✅ *Akun Anda terhubung!*\nID Telegram: `' + chatId + '`\n\nVideo apa pun yang Anda render dari *Web App* atau dari sini akan langsung dikirimkan ke ruang chat ini.'
               );
               continue;
             }
@@ -469,6 +478,8 @@ async function startTelegramPolling() {
           if (update.callback_query) {
             const cb = update.callback_query;
             const chatId = cb.message.chat.id;
+            lastActiveChatId = chatId; // Otomatis mengunci Chat ID aktif
+
             const dataStr = cb.data || '';
 
             if (dataStr.startsWith('render_')) {
@@ -535,13 +546,15 @@ app.post('/render-webhook', (req, res) => {
     return;
   }
 
-  const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
+  // Jika Web Bolt mengirimkan chat_id null, gunakan ID Telegram yang tersimpan otomatis
+  const targetChatId = payload.chat_id || payload.chatId || lastActiveChatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
+  console.log('[TARGET PENGIRIMAN] Telegram Chat ID:', targetChatId);
 
   executeRenderJob({
     videoUrl: videoUrl,
     startTimeRaw: payload.timestamps?.start_time || payload.start_time || '00:00:10',
     durationRaw: payload.timestamps?.duration_seconds || payload.duration || 60,
-    chatId: chatId,
+    chatId: targetChatId,
     clipTitle: payload.title || payload.clip_title || 'Viral Educational Clip',
     hookHeadline: payload.hook_headline || payload.hook || '',
     socialCaption: payload.social_caption || ''
