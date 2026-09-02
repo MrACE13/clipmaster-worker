@@ -6,15 +6,39 @@ const ffmpeg = require('fluent-ffmpeg');
 require('dotenv').config();
 
 const app = express();
+
+// 1. IZINKAN CORS & LOGGER PERMINTAAN DARI WEB BOLT
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
+
+// Log setiap request yang masuk ke Railway
+app.use((req, res, next) => {
+  console.log('[REQUEST MASUK] ' + req.method + ' ' + req.url);
+  next();
+});
 
 // Konfigurasi Token & API Key
 const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-// Penyimpanan cache data 5 klip per chat
+// Penyimpanan cache data klip
 const clipsMemoryCache = new Map();
+
+// Route dasar untuk cek status server
+app.get('/', (req, res) => {
+  res.send('ClipMaster AI Worker & Studio Engine Online!');
+});
 
 // Helper konversi waktu ke detik
 function parseTimeToSeconds(timeInput) {
@@ -68,7 +92,7 @@ async function sendTelegramMsg(chatId, text, replyMarkup = null) {
   }
 }
 
-// Respon klik callback tombol
+// Respon klik callback tombol Telegram
 async function answerCallback(callbackQueryId, text = '') {
   if (!BOT_TOKEN || !callbackQueryId) return;
   try {
@@ -147,7 +171,7 @@ async function downloadSourceVideo(videoUrl, outputPath) {
 }
 
 // ============================================================================
-// TINGKAT 2: AI GENERATOR SUBTITLE KARAOKE BERGERAK (ASS FORMAT)
+// FITUR AI: GENERATE SUBTITLE KARAOKE BERGERAK (ASS FORMAT)
 // ============================================================================
 async function generateKaraokeSubtitles(rawVideoPath, startSec, durSec, outputAssPath) {
   if (!GEMINI_API_KEY) return false;
@@ -206,11 +230,11 @@ async function generateKaraokeSubtitles(rawVideoPath, startSec, durSec, outputAs
 }
 
 // ============================================================================
-// CORE PIPELINE: RENDER STUDIO TINGKAT 1 + SUBTITLE AI TINGKAT 2
+// CORE PIPELINE: RENDER STUDIO + TEASER 3.5s + AUDIO MASTERING
 // ============================================================================
 async function executeRenderJob(params) {
   const { videoUrl, startTimeRaw, durationRaw, chatId, clipTitle, hookHeadline, socialCaption } = params;
-  if (!videoUrl || !chatId) return;
+  if (!videoUrl) return;
 
   const startSec = parseTimeToSeconds(startTimeRaw);
   const durSec = Math.max(20, parseTimeToSeconds(durationRaw));
@@ -225,12 +249,15 @@ async function executeRenderJob(params) {
     const totalDetik = durSec % 60;
     const durasiText = totalMenit > 0 ? totalMenit + 'm ' + totalDetik + 's' : totalDetik + 's';
 
-    await sendTelegramMsg(chatId, '⏳ *Sedang merender klip tingkat studio:*\n"' + clipTitle + '"\n⏱ Durasi: *' + durasiText + '*\n🎨 *Fitur Aktif:* Visual Sharpening + Audio Mastering EBU R128 + AI Subtitle Karaoke\n\nMohon tunggu sekitar 1-3 menit...');
+    console.log('Mulai memproses video: ' + clipTitle + ' (' + durasiText + ')');
+    if (chatId) {
+      await sendTelegramMsg(chatId, '⏳ *Sedang merender klip tingkat studio:*\n"' + clipTitle + '"\n⏱ Durasi: *' + durasiText + '*\n🎨 *Fitur Aktif:* Visual Sharpening + Audio Mastering EBU R128 + AI Subtitle Karaoke\n\nMohon tunggu sekitar 1-3 menit...');
+    }
 
     // 1. Download video sumber
     await downloadSourceVideo(videoUrl, rawDownload);
 
-    // 2. Generate Subtitle Karaoke AI (Tingkat 2)
+    // 2. Generate Subtitle Karaoke AI
     const hasSubtitles = await generateKaraokeSubtitles(rawDownload, startSec, durSec, assSubtitlePath);
 
     // 3. Konfigurasi Teaser Cuplikan Pembuka & Transisi Penutup
@@ -271,16 +298,20 @@ async function executeRenderJob(params) {
       });
     });
 
-    let captionText = '🎬 *' + clipTitle + '*\n⏱ Durasi: *' + durasiText + '*\n\n';
-    if (hookHeadline) captionText += '🎯 *Hook:* ' + hookHeadline + '\n\n';
-    if (socialCaption) captionText += '📝 *Caption Medsos:* \n' + socialCaption + '\n\n';
-    captionText += '✨ *Kualitas Studio:* Visual Sharp & Vibrant | Audio EBU R128 | Subtitle Karaoke AI!';
+    if (chatId) {
+      let captionText = '🎬 *' + clipTitle + '*\n⏱ Durasi: *' + durasiText + '*\n\n';
+      if (hookHeadline) captionText += '🎯 *Hook:* ' + hookHeadline + '\n\n';
+      if (socialCaption) captionText += '📝 *Caption Medsos:* \n' + socialCaption + '\n\n';
+      captionText += '✨ *Kualitas Studio:* Visual Sharp & Vibrant | Audio EBU R128 | Subtitle Karaoke AI!';
 
-    await sendTelegramVideo(chatId, outputClip, captionText);
+      await sendTelegramVideo(chatId, outputClip, captionText);
+    }
 
   } catch (err) {
     console.error('Proses gagal:', err.message);
-    await sendTelegramMsg(chatId, '❌ Gagal memproses video: ' + err.message);
+    if (chatId) {
+      await sendTelegramMsg(chatId, '❌ Gagal memproses video: ' + err.message);
+    }
   } finally {
     const cleanupFiles = [rawDownload, outputClip, assSubtitlePath];
     cleanupFiles.forEach(f => {
@@ -290,11 +321,13 @@ async function executeRenderJob(params) {
 }
 
 // ============================================================================
-// AI KURATOR: 5 KLIP EDUKATIF BERBOBOT UTUH (1–5 MENIT)
+// AI KURATOR: 5 KLIP EDUKATIF BERBOBOT (1–5 MENIT)
 // ============================================================================
 async function handleAnalyzeAndSend5Clips(chatId, videoUrl) {
   try {
-    await sendTelegramMsg(chatId, '🧠 *AI sedang menyimak video dan mengkurasi 5 klip edukatif berbobot (1–5 menit tanpa terpotong)...*\nMohon tunggu sekitar 15–30 detik.');
+    if (chatId) {
+      await sendTelegramMsg(chatId, '🧠 *AI sedang menyimak video dan mengkurasi 5 klip edukatif berbobot (1–5 menit tanpa terpotong)...*\nMohon tunggu sekitar 15–30 detik.');
+    }
 
     const prompt = 'Anda adalah Produser Konten Video Pendek & Ahli Viralitas Media Sosial Indonesia.\n' +
       'Tugas Anda: Dari video URL "' + videoUrl + '", temukan dan kurasi MINIMAL 5 REKOMENDASI KLIP TERBAIK (5 Topik Berbeda) yang kaya wawasan, edukatif, inovatif, atau bernilai inspirasi tinggi.\n\n' +
@@ -339,54 +372,61 @@ async function handleAnalyzeAndSend5Clips(chatId, videoUrl) {
       throw new Error('Format respon AI tidak sesuai');
     }
 
-    clipsMemoryCache.set(String(chatId), {
-      videoUrl: videoUrl,
-      clips: resultJson.clips
-    });
+    if (chatId) {
+      clipsMemoryCache.set(String(chatId), {
+        videoUrl: videoUrl,
+        clips: resultJson.clips
+      });
 
-    for (const clip of resultJson.clips) {
-      const startSec = parseTimeToSeconds(clip.start_time);
-      const endSec = startSec + clip.duration;
-      const startFormatted = formatSeconds(startSec);
-      const endFormatted = formatSeconds(endSec);
+      for (const clip of resultJson.clips) {
+        const startSec = parseTimeToSeconds(clip.start_time);
+        const endSec = startSec + clip.duration;
+        const startFormatted = formatSeconds(startSec);
+        const endFormatted = formatSeconds(endSec);
 
-      const m = Math.floor(clip.duration / 60);
-      const s = clip.duration % 60;
-      const durText = m > 0 ? m + 'm ' + s + 's' : s + 's';
+        const m = Math.floor(clip.duration / 60);
+        const s = clip.duration % 60;
+        const durText = m > 0 ? m + 'm ' + s + 's' : s + 's';
 
-      const cardMessage = 
-        '🎬 *Clip #' + clip.clip_number + '*\n' +
-        '*' + clip.title + '*\n\n' +
-        '⏱ `' + startFormatted + ' → ' + endFormatted + '` (*' + durText + '*)\n' +
-        '⚡ Virality: *' + (clip.virality_score || 85) + '/100*\n' +
-        '📱 Format: *9:16 (Studio Quality)*\n\n' +
-        '💡 _' + clip.hook_reason + '_\n\n' +
-        '🏷 ' + (clip.tags || '#edukasi #viral') + '\n\n' +
-        '📱 *TikTok / Reels:*\n' + (clip.social_tiktok || 'Simak pembahasannya! #fyp') + '\n\n' +
-        '▶️ *YouTube Shorts:*\n' + (clip.social_shorts || 'Poin penting dari video ini #shorts') + '\n\n' +
-        '🎨 Visual: Teaser 0-3s + Color Pop + Subtitle Karaoke AI\n' +
-        '📊 Reach: *' + (clip.reach || '1K-10K') + '*';
+        const cardMessage = 
+          '🎬 *Clip #' + clip.clip_number + '*\n' +
+          '*' + clip.title + '*\n\n' +
+          '⏱ `' + startFormatted + ' → ' + endFormatted + '` (*' + durText + '*)\n' +
+          '⚡ Virality: *' + (clip.virality_score || 85) + '/100*\n' +
+          '📱 Format: *9:16 (Studio Quality)*\n\n' +
+          '💡 _' + clip.hook_reason + '_\n\n' +
+          '🏷 ' + (clip.tags || '#edukasi #viral') + '\n\n' +
+          '📱 *TikTok / Reels:*\n' + (clip.social_tiktok || 'Simak pembahasannya! #fyp') + '\n\n' +
+          '▶️ *YouTube Shorts:*\n' + (clip.social_shorts || 'Poin penting dari video ini #shorts') + '\n\n' +
+          '🎨 Visual: Teaser 0-3s + Color Pop + Subtitle Karaoke AI\n' +
+          '📊 Reach: *' + (clip.reach || '1K-10K') + '*';
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '🎥 Render Clip', callback_data: 'render_' + clip.clip_number },
-            { text: '📱 Open in App', url: videoUrl }
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '🎥 Render Clip', callback_data: 'render_' + clip.clip_number },
+              { text: '📱 Open in App', url: videoUrl }
+            ]
           ]
-        ]
-      };
+        };
 
-      await sendTelegramMsg(chatId, cardMessage, keyboard);
+        await sendTelegramMsg(chatId, cardMessage, keyboard);
+      }
     }
+
+    return resultJson;
 
   } catch (err) {
     console.error('Gagal analisis AI:', err.message);
-    await sendTelegramMsg(chatId, '❌ Gagal menganalisis video: ' + err.message);
+    if (chatId) {
+      await sendTelegramMsg(chatId, '❌ Gagal menganalisis video: ' + err.message);
+    }
+    return null;
   }
 }
 
 // ============================================================================
-// TELEGRAM POLLING LISTENER
+// TELEGRAM BOT POLLING LISTENER
 // ============================================================================
 let lastUpdateId = 0;
 async function startTelegramPolling() {
@@ -470,28 +510,38 @@ async function startTelegramPolling() {
 }
 
 // ============================================================================
-// EXPRESS WEBHOOK ENDPOINTS
+// EXPRESS WEBHOOK ENDPOINTS (DIHUBUNGKAN DARI WEB BOLT)
 // ============================================================================
-app.post('/analyze-video', (req, res) => {
+app.post('/analyze-video', async (req, res) => {
   const { url, chat_id } = req.body || {};
   const videoUrl = cleanYouTubeUrl(url);
   res.status(200).json({ status: 'Analysis started' });
-  if (videoUrl && chat_id) handleAnalyzeAndSend5Clips(chat_id, videoUrl);
+  if (videoUrl) handleAnalyzeAndSend5Clips(chat_id, videoUrl);
 });
 
 app.post('/render-webhook', (req, res) => {
+  console.log('[RENDER WEBHOOK DITERIMA]', JSON.stringify(req.body));
   const payload = req.body || {};
-  res.status(200).json({ status: 'Processing started' });
+  
+  res.status(200).json({ 
+    status: 'Processing started',
+    message: 'Render job accepted by Railway worker' 
+  });
 
-  const rawUrl = payload.video_url || payload.source_url || payload.url;
+  const rawUrl = payload.video_url || payload.source_url || payload.url || payload.clip_data?.source_url || payload.clip_data?.video_url;
   const videoUrl = cleanYouTubeUrl(rawUrl);
-  if (!videoUrl) return;
+  if (!videoUrl) {
+    console.error('URL video tidak valid atau kosong dalam webhook payload.');
+    return;
+  }
+
+  const chatId = payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
 
   executeRenderJob({
     videoUrl: videoUrl,
     startTimeRaw: payload.timestamps?.start_time || payload.start_time || '00:00:10',
     durationRaw: payload.timestamps?.duration_seconds || payload.duration || 60,
-    chatId: payload.chat_id || payload.chatId || process.env.DEFAULT_TELEGRAM_CHAT_ID,
+    chatId: chatId,
     clipTitle: payload.title || payload.clip_title || 'Viral Educational Clip',
     hookHeadline: payload.hook_headline || payload.hook || '',
     socialCaption: payload.social_caption || ''
