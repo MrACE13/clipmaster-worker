@@ -32,7 +32,7 @@ const rawToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_TOKEN = rawToken.trim().replace(/^bot/i, '');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-// Penyimpanan cache data klip & Chat ID pengguna terakhir
+// Penyimpanan cache data klip & Chat ID pengguna
 const clipsMemoryCache = new Map();
 let lastActiveChatId = process.env.DEFAULT_TELEGRAM_CHAT_ID || null;
 
@@ -113,7 +113,10 @@ async function sendTelegramVideo(chatId, videoPath, caption) {
     return;
   }
   try {
-    console.log('Mengunggah video ke Telegram Chat ID: ' + chatId + '...');
+    const stats = fs.statSync(videoPath);
+    const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+    console.log('Mengunggah video (' + fileSizeMB + ' MB) ke Telegram Chat ID: ' + chatId + '...');
+
     const fileBuffer = fs.readFileSync(videoPath);
     const blob = new Blob([fileBuffer], { type: 'video/mp4' });
     const formData = new FormData();
@@ -235,7 +238,7 @@ async function generateKaraokeSubtitles(rawVideoPath, startSec, durSec, outputAs
 }
 
 // ============================================================================
-// CORE PIPELINE: RENDER STUDIO + TEASER 3.5s + AUDIO MASTERING
+// CORE PIPELINE: RENDER STUDIO DENGAN AUTO-COMPRESSION UNDER 45 MB
 // ============================================================================
 async function executeRenderJob(params) {
   const { videoUrl, startTimeRaw, durationRaw, chatId, clipTitle, hookHeadline, socialCaption } = params;
@@ -290,8 +293,14 @@ async function executeRenderJob(params) {
       '[1:a]highpass=f=60,lowpass=f=14000,loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.4,afade=t=out:st=' + outroFadeStart + ':d=' + outroFadeDur + ',aformat=sample_rates=44100:channel_layouts=stereo[a1];' +
       '[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]';
 
-    console.log('Mulai rendering FFmpeg Studio Grade...');
-    const ffmpegCmd = 'ffmpeg -y -ss ' + teaserStartSec + ' -t ' + teaserDur + ' -i "' + rawDownload + '" -ss ' + startSec + ' -t ' + durSec + ' -i "' + rawDownload + '" -filter_complex "' + filterComplex + '" -map "[outv]" -map "[outa]" -c:v libx264 -preset ultrafast -c:a aac -b:a 192k -movflags +faststart "' + outputClip + '"';
+    // 4. Kalkulator Bitrate Dinamis (Memastikan ukuran file selalu di bawah 45 MB)
+    const maxTargetSizeBytes = 42 * 1024 * 1024; // Target 42 MB (Aman di bawah 50 MB)
+    const audioBitrateKbps = 128;
+    const calculatedVideoKbps = Math.floor(((maxTargetSizeBytes * 8) / (durSec + teaserDur)) / 1000) - audioBitrateKbps;
+    const finalVideoBitrate = Math.min(2200, Math.max(500, calculatedVideoKbps));
+
+    console.log('Mulai rendering FFmpeg (Dynamic Bitrate: ' + finalVideoBitrate + 'k)...');
+    const ffmpegCmd = 'ffmpeg -y -ss ' + teaserStartSec + ' -t ' + teaserDur + ' -i "' + rawDownload + '" -ss ' + startSec + ' -t ' + durSec + ' -i "' + rawDownload + '" -filter_complex "' + filterComplex + '" -map "[outv]" -map "[outa]" -c:v libx264 -preset veryfast -b:v ' + finalVideoBitrate + 'k -maxrate ' + Math.floor(finalVideoBitrate * 1.3) + 'k -bufsize ' + Math.floor(finalVideoBitrate * 2) + 'k -c:a aac -b:a 128k -movflags +faststart "' + outputClip + '"';
 
     await new Promise((resolve, reject) => {
       exec(ffmpegCmd, (error, stdout, stderr) => {
@@ -311,7 +320,7 @@ async function executeRenderJob(params) {
 
       await sendTelegramVideo(chatId, outputClip, captionText);
     } else {
-      console.log('[PERINGATAN] Video berhasil dibuat, namun Chat ID Telegram belum terdaftar. Silakan kirim /start ke bot Telegram Anda terlebih dahulu.');
+      console.log('[PERINGATAN] Video berhasil dibuat, namun Chat ID Telegram belum terdaftar.');
     }
 
   } catch (err) {
@@ -455,14 +464,14 @@ async function startTelegramPolling() {
 
           if (update.message && update.message.text) {
             const chatId = update.message.chat.id;
-            lastActiveChatId = chatId; // Otomatis mengunci Chat ID aktif
+            lastActiveChatId = chatId;
 
             const text = update.message.text.trim();
 
             if (text.startsWith('/start')) {
               await sendTelegramMsg(
                 chatId,
-                '👋 *Selamat datang di ClipMaster AI Studio!*\n\n✅ *Akun Anda terhubung!*\nID Telegram: `' + chatId + '`\n\nVideo apa pun yang Anda render dari *Web App* atau dari sini akan langsung dikirimkan ke ruang chat ini.'
+                '👋 *Selamat datang di ClipMaster AI Studio!*\n\n✅ *Akun Anda terhubung!*\nID Telegram: `' + chatId + '`\n\nVideo apa pun yang Anda render dari *Web App* akan otomatis dikirimkan ke chat ini.'
               );
               continue;
             }
@@ -478,7 +487,7 @@ async function startTelegramPolling() {
           if (update.callback_query) {
             const cb = update.callback_query;
             const chatId = cb.message.chat.id;
-            lastActiveChatId = chatId; // Otomatis mengunci Chat ID aktif
+            lastActiveChatId = chatId;
 
             const dataStr = cb.data || '';
 
@@ -546,7 +555,6 @@ app.post('/render-webhook', (req, res) => {
     return;
   }
 
-  // Jika Web Bolt mengirimkan chat_id null, gunakan ID Telegram yang tersimpan otomatis
   const targetChatId = payload.chat_id || payload.chatId || lastActiveChatId || process.env.DEFAULT_TELEGRAM_CHAT_ID;
   console.log('[TARGET PENGIRIMAN] Telegram Chat ID:', targetChatId);
 
